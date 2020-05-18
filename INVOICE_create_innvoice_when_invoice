@@ -1,0 +1,461 @@
+
+//************************************************************//
+// *********************** INIT  *****************************//
+//***********************************************************//
+//BASICS 
+invoice_id = invoice.get("invoice_id");
+organization_id = organization.get("organization_id");
+// INVOICE 
+invoice_record = zoho.books.getRecordsByID("invoices",organization_id,invoice_id);
+// SALES ORDER 
+salesorder_id = invoice_record.get("invoice").get("salesorder_id");
+// CUSTMER 
+customer_id = invoice_record.get("invoice").get("customer_id");
+if(customer_id != null || customer_id != "")
+{
+	customer_record = zoho.books.getRecordsByID("Contacts",organization_id,customer_id);
+	info "Customer: " + customer_record;
+}
+//***********************************************************//
+// ********** CHECK FOR INVOICE IN BOOKS  *******************//
+//***********************************************************//
+try 
+{
+	cf_fields = invoice_record.get("invoice").get("custom_fields").toJSONList();
+	van_mar_szamla = false;
+	for each  cf_field in cf_fields
+	{
+		if(cf_field.get("placeholder") == "cf_innvoice_sz_mlasz_m")
+		{
+			van_mar_szamla = true;
+		}
+	}
+	info "Van már InnVoice számla a Zoho booksban?: " + van_mar_szamla;
+}
+ catch (e)
+{	info "Custom field hiba: " + e;
+	sendmail
+	[
+		from :zoho.adminuserid
+		to :"karoly.istvan.kovacs@gmail.com"
+		cc:"karoly.istvan.kovacs@gmail.com"
+		subject :"Custom field hiba / Zoho Books "
+		message :"<h2>Custom field hiba</h2><p>Részletek:</p> <pre><code>" + e + "</code></pre><br><pre><code>" + invoice_record + "</code></pre>"
+	]
+}
+//***********************************************************//
+// ********** CHECK FOR INVOICE IN BOOKS  *******************//
+//***********************************************************//
+if(!van_mar_szamla)
+{
+	// ...............................Creator record checking...........................................
+	name = invoice_record.get("invoice").get("contact_persons_details").get(0).get("last_name") + " " + invoice_record.get("invoice").get("contact_persons_details").get(0).get("first_name");
+	total = invoice_record.get("invoice").get("total").toLong();
+	creator_record = zoho.creator.getRecords("balazs2","szamlazz","Sz_ml_k_Report","invoice_BruttoErtek == " + total.toString() + " & invoice_VevoNev == " + name);
+	creator_update = "false";
+	for each  rec in creator_record
+	{
+		if(rec.get("invoice_VevoNev") == name)
+		{
+			info rec.get("invoice_VevoNev");
+			info "......................van creatorban számla!!..............................";
+			//info "............creator record record................";
+			info rec.get("invoice_BruttoErtek");
+			info rec.get("invoice_TABLE_ID");
+			info rec.get("invoice_PrintLink");
+			info rec.get("invoice_SorszamFormatted");
+			//info "............books update start................";
+			brutto = rec.get("invoice_BruttoErtek");
+			table_id = rec.get("invoice_TABLE_ID");
+			printurl = rec.get("invoice_PrintLink");
+			sorszam = rec.get("invoice_SorszamFormatted");
+			CustomFields = List();
+			//
+			CustomField = Map();
+			CustomField.put("api_name","cf_innvoice_id");
+			CustomField.put("value",table_id.toString());
+			CustomFields.add(CustomField);
+			//
+			CustomField = Map();
+			CustomField.put("api_name","cf_innvoice_sz_mlasz_m");
+			CustomField.put("value",sorszam.toString());
+			CustomFields.add(CustomField);
+			//
+			CustomField = Map();
+			CustomField.put("api_name","cf_innvoice_url");
+			CustomField.put("value",printurl.toString());
+			CustomFields.add(CustomField);
+			// InnVoice Számlakép
+			json = Map();
+			json.put("custom_fields",CustomFields);
+			payment_gateways = Map();
+			payment_gateways.put("payment_gateways",{});
+			json.put("payment_options",payment_gateways);
+			//info json;
+			zbooks_update = zoho.books.updateRecord("Invoices",organization_id.toString(),invoice_id.toString(),json);
+			info zbooks_update;
+			creator_update = "true";
+		}
+	}
+	if(creator_update == "false")
+	{
+		info "Nem található még kiállított számla. --> Számlakiállítás.";
+		//***********************************************************//
+		// ********** CREATE INVOICE IN INNVOICE  *******************//
+		//***********************************************************//
+		//salesorder = zoho.books.getRecordsByID("Salesorders",organization_id,salesorder_id);
+		//customerID = salesorder.get("customer_id");
+		resultMap = Map();
+		// API keys
+		innvoice_username = "groenk";
+		innvoice_password = "uwn79XPaq8UnRBdFyLnVahbDU86AxJR5";
+		// Customer details
+		//customer_record = zoho.books.getRecordsByID("Contacts",organization_id,customerID);
+		sales_record = zoho.books.getRecordsByID("Salesorders",organization_id,salesorder_id);
+		part_VevoNev = "<VevoNev><![CDATA[" + sales_record.get("salesorder").get("contact_person_details").get(0).get("last_name") + " " + sales_record.get("salesorder").get("contact_person_details").get(0).get("first_name") + "]]></VevoNev>";
+		// VEVO IRSZ V2
+		irsz = "";
+		if(sales_record.get("salesorder").get("billing_address").get("zip") != "")
+		{
+			irsz = sales_record.get("salesorder").get("billing_address").get("zip");
+		}
+		if(irsz == "")
+		{
+			irsz = sales_record.get("salesorder").get("shipping_address").get("zip");
+		}
+		if(customer_id != null)
+		{
+			if(irsz == "")
+			{
+				irsz = customer_record.get("contact").get("billing_address").get("zip");
+			}
+			if(irsz == "")
+			{
+				irsz = customer_record.get("contact").get("shipping_address").get("zip");
+			}
+		}
+		part_VevoIrsz = "<VevoIrsz><![CDATA[" + irsz + "]]></VevoIrsz>";
+		// EO VEVO IRSZ V2
+		// VEVŐTELEP V2
+		vevotelep = sales_record.get("salesorder").get("billing_address").get("city");
+		if(vevotelep == "")
+		{
+			vevotelep = sales_record.get("salesorder").get("shipping_address").get("city");
+		}
+		if(customer_id != null)
+		{
+			if(vevotelep == "")
+			{
+				vevotelep = customer_record.get("contact").get("billing_address").get("city");
+			}
+			if(vevotelep == "")
+			{
+				vevotelep = customer_record.get("contact").get("shipping_address").get("city");
+			}
+		}
+		part_VevoTelep = "<VevoTelep><![CDATA[" + vevotelep + "]]></VevoTelep>";
+		// EO VEVOTELEP 
+		// VEVOORSZAG 
+		part_VevoOrszag = "<VevoOrszag><![CDATA[HU]]></VevoOrszag>";
+		// EO VEVOORSZAG 
+		// VEVOUTCA V2
+		vevoutca = sales_record.get("salesorder").get("billing_address").get("address");
+		if(vevoutca == "")
+		{
+			vevoutca = sales_record.get("salesorder").get("shipping_address").get("address");
+			info "vevoutca_shipping: " + vevoutca;
+			info "";
+		}
+		if(customer_id != null)
+		{
+			info "Customer ID: " + customer_id;
+			if(vevoutca == "")
+			{
+				vevoutca = customer_record.get("contact").get("billing_address").get("address");
+			}
+			if(vevoutca == "")
+			{
+				vevoutca = customer_record.get("contact").get("billing_address").get("street2");
+			}
+			if(vevoutca == "")
+			{
+				vevoutca = customer_record.get("contact").get("shipping_address").get("address");
+			}
+			if(vevoutca == "")
+			{
+				vevoutca = customer_record.get("contact").get("shipping_address").get("street2");
+			}
+		}
+		info "";
+		part_VevoUtcaHsz = "<VevoUtcaHsz><![CDATA[" + vevoutca + "]]></VevoUtcaHsz>";
+		// EO VEVOUTCA V2
+		// INVOICE DETAILS
+		part_SzamlatombID = "<SzamlatombID><![CDATA[1]]></SzamlatombID>";
+		part_SzamlaKelte = "<SzamlaKelte><![CDATA[" + today.toString("YYYY.MM.dd.") + "]]></SzamlaKelte>";
+		part_TeljesitesKelte = "<TeljesitesKelte><![CDATA[" + today.toString("YYYY.MM.dd.") + "]]></TeljesitesKelte>";
+		part_Hatarido = "<Hatarido><![CDATA[" + today.toString("YYYY.MM.dd.") + "]]></Hatarido>";
+		part_FizetesiMod = "<FizetesiMod><![CDATA[átutalás]]></FizetesiMod>";
+		part_Felretett = "<Felretett>0</Felretett>";
+		part_Proforma = "<Proforma>0</Proforma>";
+		part_VevoAdoszam = "<VevoAdoszam><![CDATA[" + " " + "]]></VevoAdoszam>";
+		part_VevoEmail = "<Email><![CDATA[" + sales_record.get("salesorder").get("contact_person_details").get(0).get("email") + "]]></Email>";
+		//
+		part_Sendmail = "<Sendmail>1</Sendmail>";
+		part_MailSubject = "<MailSubject>GROENK SZÁMLA</MailSubject>";
+		//part_MailBody = "<MailBody><![CDATA[<h2> Kedves " + sales_record.get("salesorder").get("contact_person_details").get(0).get("last_name") + " " + sales_record.get("salesorder").get("contact_person_details").get(0).get("first_name") + "</h2><p> Köszönjük, hogy tőlünk vásároltál, számládat a linkre klikkelve éred el. Amennyiben az utalásos fizetést választottad, kérlek, hogy legkésőbb ma éjfélig utald át az összeget erre a számlaszámra: OTP 11705015-21157035.</p><p>A pontos kiszállítási időről emailben értesülsz majd.</p><p> Köszönjük!</p>]]></MailBody>";
+		//part_MailBody = "<MailBody><![CDATA[<h2> Kedves " + sales_record.get("salesorder").get("contact_person_details").get(0).get("last_name") + " " + sales_record.get("salesorder").get("contact_person_details").get(0).get("first_name") + "</h2><p> Köszönjük, hogy tőlünk vásárolt. Ez a számla egy koràbban kiszállított rendelésére vonatkozik, amennyiben számláját már rendezte, kérem, tekintse tárgytalannak. Köszönettel, Groenk Csapata</p> <p>Remélem, hogy legközelebb is minket választ: www.groenk.hu/hazhozszallitas</p>]]></MailBody>";
+		part_MailBody = "<MailBody><![CDATA[<h3> Kedves Vásárlónk!</h3><p>Számládat csatolva találod, köszönjük, hogy tőlünk vásároltál. Ha az utalásos fizetést választottad, kérlek, hogy az összeget az OTP <strong>11705015-21157035-00000000</strong> számlaszámra utald el.</p><p>Napi hírekért kövess minket a facebookon vagy az instagramon (@groenk_hazhozszallitas).</p><p>Üdvözlettel,</p><p>A GROENK Csapata</p>]]></MailBody>";
+		// LINE ITEMS
+		line_items = sales_record.get("salesorder").get("line_items");
+		products = "";
+		for each  item in line_items
+		{
+			bill_curr = "HUF";
+			part_Devizanem = "<Devizanem><![CDATA[" + bill_curr + "]]></Devizanem>";
+			product_body = "";
+			part_product_body_header = "<tetel>";
+			part_product_body_footer = "</tetel>";
+			product_body = product_body + part_product_body_header;
+			product_body = product_body + "<TetelNev><![CDATA[" + item.get("name") + "]]></TetelNev>";
+			// Megjegyzes ***************************************
+			product_body = product_body + "<Megjegyzes><![CDATA[" + "" + "]]></Megjegyzes>";
+			// Mennyiseg ****************************************
+			product_body = product_body + "<Mennyiseg><![CDATA[" + item.get("quantity") + "]]></Mennyiseg>";
+			// EgysegAr *****************************************
+			product_body = product_body + "<EgysegAr><![CDATA[" + item.get("rate") + "]]></EgysegAr>";
+			// Brutto *****************************************
+			product_body = product_body + "<Brutto>";
+			product_body = product_body + item.get("item_total");
+			product_body = product_body + "</Brutto>";
+			// Áfaszöveg *****************************************
+			vat = item.get("tax_percentage");
+			product_body = product_body + "<AfaSzoveg><![CDATA[" + vat + "%]]></AfaSzoveg>";
+			// ******************************************************
+			// * Product Dedtail Footer ******************************
+			// *******************************************************
+			product_body = product_body + part_product_body_footer;
+			products = products + product_body;
+			//resultMap.put(item.get("rate"),item.get("name"));
+		}
+		// SZÁLLÍTÁSI DÍJ
+		//
+		shipping_charge = "";
+		part_product_body_header = "<tetel>";
+		part_product_body_footer = "</tetel>";
+		shipping_charge = shipping_charge + part_product_body_header;
+		shipping_charge = shipping_charge + "<TetelNev><![CDATA[Kiszállítási díj]]></TetelNev>";
+		// Megjegyzes ***************************************
+		shipping_charge = shipping_charge + "<Megjegyzes><![CDATA[]]></Megjegyzes>";
+		// Mennyiseg ****************************************
+		shipping_charge = shipping_charge + "<Mennyiseg><![CDATA[1]]></Mennyiseg>";
+		// EgysegAr *****************************************
+		shipping_charge = shipping_charge + "<EgysegAr><![CDATA[" + sales_record.get("salesorder").get("shipping_charge_exclusive_of_tax") + "]]></EgysegAr>";
+		// Brutto *****************************************
+		shipping_charge = shipping_charge + "<Brutto>";
+		shipping_charge = shipping_charge + sales_record.get("salesorder").get("shipping_charge_inclusive_of_tax");
+		shipping_charge = shipping_charge + "</Brutto>";
+		// Áfaszöveg *****************************************
+		shipping_charge = shipping_charge + "<AfaSzoveg><![CDATA[27%]]></AfaSzoveg>";
+		shipping_charge = shipping_charge + part_product_body_footer;
+		if(sales_record.get("salesorder").get("shipping_charge_exclusive_of_tax") != "0.0")
+		{
+			products = products + shipping_charge;
+		}
+		//*********SENDING THROUGH API*******
+		rawBody = "<invoices><invoice><Eszamla>1</Eszamla>" + part_VevoNev + part_VevoIrsz + part_VevoTelep + part_VevoOrszag + part_VevoUtcaHsz + part_SzamlatombID + part_VevoEmail + part_Sendmail + part_MailSubject + part_MailBody + part_VevoAdoszam + part_SzamlaKelte + part_TeljesitesKelte + part_Hatarido + part_Devizanem + part_FizetesiMod + part_Proforma + part_Felretett + products + "</invoice></invoices>";
+		baseEncoded = zoho.encryption.base64Encode(innvoice_username + ":" + innvoice_password);
+		header = Map:String({"Authorization":"Basic " + baseEncoded});
+		usersMap = Map:String();
+		usersMap.put("","");
+		resp = postUrl("http://api.innvoice.hu/" + innvoice_username + "/invoice",rawBody,header);
+		//resultMap.put(salesorder.get("line_items").get(0).get("line_item_id"),"1");
+		//resultMap.put("salesorder",salesorder);
+		resultMap.put("rawbody",rawBody);
+		resultMap.put("sales_record",sales_record);
+		resultMap.put("resp",resp);
+		info line_items;
+		info resultMap;
+		info item.get("tax_percentage");
+		invoice_resp = resp;
+		/*** ERROR HANDLING **/
+		info invoice_resp;
+		if(invoice_resp.contains("<error>200</error>"))
+		{
+			info "Megfelelo szamla";
+			inv_error_code = invoice_resp.executeXPath("/response/invoice/error/text()").toString();
+			info "Code: " + inv_error_code;
+			inv_message = invoice_resp.executeXPath("/response/invoice/message");
+			inv_message2 = inv_message.subtext(23,inv_message.length() - 18);
+			info "Message: " + inv_message2;
+			// TABLE ID 
+			table_id_raw = invoice_resp.executeXPath("/response/invoice/TABLE_ID");
+			table_id = table_id_raw.subString(24,table_id_raw.length() - 19);
+			info "Table ID: " + table_id;
+			// PRINT URL 
+			PrintUrl_raw = invoice_resp.executeXPath("/response/invoice/PrintUrl");
+			PrintUrl = PrintUrl_raw.subString(24,PrintUrl_raw.length() - 19);
+			info "Print URL: " + PrintUrl;
+			// SORSZÁM
+			sorszam_raw = invoice_resp.executeXPath("/response/invoice/Sorszam");
+			info sorszam_raw;
+			sorszam = sorszam_raw.replaceAll("</Sorszam>","").replaceAll("<Sorszam>","").trim();
+			sorszam = sorszam.subString(9,sorszam.length() - 3);
+			info "sorszam: " + sorszam;
+			//////////////////
+			// UPDATE BOOKS //
+			//////////////////
+			//
+			CustomFields = List();
+			//
+			CustomField = Map();
+			CustomField.put("api_name","cf_innvoice_id");
+			CustomField.put("value",table_id.toString());
+			CustomFields.add(CustomField);
+			//
+			CustomField = Map();
+			CustomField.put("api_name","cf_innvoice_sz_mlasz_m");
+			CustomField.put("value",sorszam.toString());
+			CustomFields.add(CustomField);
+			//
+			CustomField = Map();
+			CustomField.put("api_name","cf_innvoice_url");
+			CustomField.put("value",PrintUrl.toString());
+			CustomFields.add(CustomField);
+			// InnVoice Számlakép
+			json = Map();
+			json.put("custom_fields",CustomFields);
+			gateway_list = List();
+			payment_gateways = Map();
+			payment_gateways.put("payment_gateways",gateway_list);
+			info payment_gateways;
+			json.put("payment_options",payment_gateways);
+			info json;
+			zbooks_update = zoho.books.updateRecord("Invoices",organization_id,invoice_id,json);
+			info zbooks_update;
+			///////////////////
+			/// UPDATE BOOKS //
+			///////////////////
+		}
+		else if(invoice_resp.contains("</error>"))
+		{
+			info "Hibás szamla";
+			invoice_resp = invoice_resp.replaceFirst("response","main_response");
+			info invoice_resp;
+			invoice_resp = invoice_resp.subString(0,invoice_resp.length() - 24) + '</main_response>';
+			info invoice_resp;
+			invoice_resp = invoice_resp.toString();
+			inv_error_code = invoice_resp.executeXPath("/main_response/response/error").toString();
+			info "Code: " + inv_error_code;
+			inv_message = invoice_resp.executeXPath("/main_response/response/message");
+			inv_message = inv_message.subString(27,inv_message.length() - 22);
+			info "Message: " + inv_message;
+			// to: "emese.juhasz@gmail.com"		
+			sendmail
+			[
+				from :zoho.adminuserid
+				to :"emese.juhasz@gmail.com"
+				cc:"karoly.istvan.kovacs@gmail.com"
+				subject :"Számlakiállítási hiba: " + inv_message
+				message :"<h3> Számlakiállítási hiba </h3> <p>" + sales_record.get("salesorder").get("contact_person_details").get(0).get("last_name") + " " + sales_record.get("salesorder").get("contact_person_details").get(0).get("first_name") + " - " + invoice.get("invoice_number") + "</p> <p> Számlakiállítási hiba történt. A részleteket az alábbiakban olvashatja:</p> <pre><code> " + inv_message + " </code></pre> <br><br> <pre><code><hr>" + invoice_resp + "</code></pre><code><pre>" + rawBody + "</pre></code>"
+			]
+		}
+		else
+		{
+			info "Ismeretlen hiba";
+			info invoice_resp;
+			sendmail
+			[
+				from :zoho.adminuserid
+				to :"emese.juhasz@gmail.com"
+				cc:"karoly.istvan.kovacs@gmail.com"
+				subject :"Számlakiállítási hiba: " + "Ismeretlen hiba"
+				message :"<h3> Számlakiállítási hiba </h3> <p>" + sales_record.get("salesorder").get("contact_person_details").get(0).get("last_name") + " " + sales_record.get("salesorder").get("contact_person_details").get(0).get("first_name") + " - " + invoice.get("invoice_number") + "</p> <p> Számlakiállítási hiba történt. A részleteket az alábbiakban olvashatja:</p> <pre><code> " + invoice_resp + " </code></pre> <br><br> <pre><code><hr>" + invoice_resp + "</code></pre>"
+			]
+		}
+		/*** ERROR HANDLING **/
+	}
+}
+else
+{
+	info "A számla már rendelkezésre áll. --> Nincs művelet.";
+}
+///////////////////////////////////////////////////////////////
+// ZOHO CRM TAG UPDATE FROM BOOKS ACCORDING TO SHIPPING CITY //
+///////////////////////////////////////////////////////////////
+try 
+{
+	///////////////////////////////////////
+	// Basic ID's and records from Books //
+	///////////////////////////////////////
+	invoice_id = invoice.get("invoice_id");
+	organization_id = organization.get("organization_id");
+	invoice_record = zoho.books.getRecordsByID("invoices",organization_id,invoice_id);
+	//info invoice_record;
+	if(salesorder_id != null || salesorder_id != "")
+	{
+		salesorder_id = invoice_record.get("invoice").get("salesorder_id");
+	}
+	customer_id = invoice_record.get("invoice").get("customer_id");
+	if(customer_id != null || customer_id != "")
+	{
+		customer_record = zoho.books.getRecordsByID("Contacts",organization_id,customer_id);
+		//info "Customer: " + customer_record;
+	}
+	////////////////
+	// CRM RECORD //
+	////////////////
+	crm_contact_id = customer_record.get("contact").get("zcrm_contact_id");
+	//info crm_contact_id;
+	crm_record = zoho.crm.getRecordById("Contacts",crm_contact_id.toLong());
+	/////////////////////////////
+	// GET AND PUT CITY TO MAP //
+	/////////////////////////////
+	shipping_city = invoice_record.get("invoice").get("shipping_address").get("city");
+	info "Shipping City: " + shipping_city;
+	tagList = crm_record.get("Tag");
+	// ADDING CITY TAG //
+	tagMap = Map();
+	tagMap.put("name",shipping_city);
+	tagList.add(tagMap);
+	// ADDING VISSZATÉRŐ TAG
+	searchParam = {"customer_id":customer_id};
+	customer_invoices = zoho.books.getRecords("invoices",organization_id,searchParam).get("invoices");
+	//info customer_invoices;
+	total = 0;
+	for each  invoice in customer_invoices
+	{
+		invoice = invoice.toMap();
+		total = total + invoice.get("total");
+		//info invoice;
+	}
+	//info total;
+	if(total > invoice_record.get("invoice").get("total"))
+	{
+		tagMap = Map();
+		tagMap.put("name","Visszatérő vásárló");
+		tagList.add(tagMap);
+	}
+	// ADDING VIP TAG //
+	if(invoice_record.get("invoice").get("total") >= 25000)
+	{
+		tagMap = Map();
+		tagMap.put("name","VIP");
+		tagList.add(tagMap);
+	}
+	updateMap = Map();
+	updateMap.put("Tag",tagList);
+	////////////////////
+	// UPDATE CRM TAG //
+	////////////////////
+	crm_update = zoho.crm.updateRecord("Contacts",crm_contact_id,updateMap);
+	info "CRM TAG UPDATE:" + crm_update;
+}
+ catch (e)
+{	sendmail
+	[
+		from :zoho.adminuserid
+		to :"kiss.david.zsolt@gmail.com"
+		subject :"TAG hiba: " + "Ismeretlen hiba"
+		message :"<h3> TAG hiba </h3>" + "<pre><code> " + e + "</code></pre> <br><br>"
+	]
+}
